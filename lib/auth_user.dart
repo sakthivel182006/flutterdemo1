@@ -1,11 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class AuthUser extends StatefulWidget {
   final Function(Map<String, dynamic>) onLoginSuccess;
-  AuthUser({required this.onLoginSuccess});
+  final VoidCallback onBack;
+  AuthUser({required this.onLoginSuccess, required this.onBack});
+
   @override
   _AuthUserState createState() => _AuthUserState();
 }
@@ -19,6 +24,7 @@ class _AuthUserState extends State<AuthUser>
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool rememberMe = false;
   bool agreeToTerms = false;
+  bool _hasNetworkError = false;
 
   // Hover states for interactive elements
   bool _isLoginHovered = false;
@@ -29,6 +35,11 @@ class _AuthUserState extends State<AuthUser>
   late final AnimationController _controller;
   late final Animation<double> _fadeAnimation;
   late final Animation<Offset> _slideAnimation;
+
+  // Backend URLs
+  static const String baseUrl = "https://sakthiflutterbackend.onrender.com";
+  static const String loginEndpoint = "$baseUrl/api/users/login";
+  static const String registerEndpoint = "$baseUrl/api/users/register";
 
   @override
   void initState() {
@@ -46,6 +57,9 @@ class _AuthUserState extends State<AuthUser>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
     _controller.forward();
+
+    // Check connectivity when the widget initializes
+    _checkConnectivity();
   }
 
   @override
@@ -54,38 +68,89 @@ class _AuthUserState extends State<AuthUser>
     super.dispose();
   }
 
+  // Check internet connectivity
+  Future<void> _checkConnectivity() async {
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult == ConnectivityResult.none) {
+      setState(() {
+        _hasNetworkError = true;
+      });
+      _showSnackBar("No internet connection. Please check your network.");
+    } else {
+      setState(() {
+        _hasNetworkError = false;
+      });
+    }
+  }
+
+  // Test backend connection
+  Future<bool> _testBackendConnection() async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(baseUrl),
+            headers: {"Content-Type": "application/json"},
+          )
+          .timeout(const Duration(seconds: 10));
+
+      return response.statusCode < 400;
+    } catch (e) {
+      return false;
+    }
+  }
+
   Future<void> handleAuth() async {
     if (!_formKey.currentState!.validate()) return;
     _formKey.currentState!.save();
+
+    // Validate terms agreement for registration
+    if (!isLogin && !agreeToTerms) {
+      _showSnackBar("Please agree to the Terms & Conditions");
+      return;
+    }
+
     setState(() {
       isLoading = true;
     });
-    // Replace URLs for your backend endpoints
-    final url = isLogin
-        ? "http://localhost:5000/api/users/login"
-        : "https://gameappbackend-i8zv.onrender.com/api/auth/register";
+
+    final url = isLogin ? loginEndpoint : registerEndpoint;
     final body = isLogin
         ? {"email": email, "password": password}
         : {"name": name, "email": email, "password": password};
+
     try {
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(body),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+      final response = await http
+          .post(
+            Uri.parse(url),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 50));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
         if (data['user'] != null) {
           await _storeUserData(data['user']);
+          _showSuccessSnackBar(
+            isLogin ? "Login successful!" : "Registration successful!",
+          );
           widget.onLoginSuccess(data['user']);
         } else {
           _showSnackBar("Auth failed: User data not found");
         }
       } else {
-        _showSnackBar("Auth failed: ${response.body}");
+        _showSnackBar(data['message'] ?? "Auth failed: ${response.statusCode}");
       }
+    } on SocketException {
+      _showSnackBar("Network error: Unable to connect to server");
+      setState(() {
+        _hasNetworkError = true;
+      });
+    } on TimeoutException {
+      _showSnackBar("Request timeout: Server is taking too long to respond");
     } catch (e) {
-      _showSnackBar("Network error: $e");
+      _showSnackBar("An unexpected error occurred: $e");
     } finally {
       setState(() {
         isLoading = false;
@@ -107,6 +172,9 @@ class _AuthUserState extends State<AuthUser>
     if (user['createdAt'] != null) {
       await prefs.setString('createdAt', user['createdAt']);
     }
+    if (rememberMe) {
+      await prefs.setBool('rememberMe', true);
+    }
   }
 
   void _showSnackBar(String message) {
@@ -116,6 +184,86 @@ class _AuthUserState extends State<AuthUser>
         backgroundColor: Colors.red.shade600,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
+  void _showSuccessSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.green.shade600,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // Retry connection method
+  void _retryConnection() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    await _checkConnectivity();
+    final hasConnection = await _testBackendConnection();
+
+    setState(() {
+      isLoading = false;
+      _hasNetworkError = !hasConnection;
+    });
+
+    if (hasConnection) {
+      _showSuccessSnackBar("Connection restored! You can now login.");
+    } else {
+      _showSnackBar("Still unable to connect. Please check your network.");
+    }
+  }
+
+  // Add this widget to show connection error UI
+  Widget _buildConnectionError() {
+    return Container(
+      padding: EdgeInsets.all(16),
+      margin: EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.wifi_off, color: Colors.red),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "Network connection issue",
+                  style: TextStyle(
+                    color: Colors.red.shade800,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 10),
+          Text(
+            "Cannot connect to the authentication server. Please check your internet connection.",
+            style: TextStyle(color: Colors.red.shade700),
+          ),
+          SizedBox(height: 10),
+          ElevatedButton.icon(
+            onPressed: _retryConnection,
+            icon: Icon(Icons.refresh),
+            label: Text("Retry Connection"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -218,11 +366,25 @@ class _AuthUserState extends State<AuthUser>
                   ),
                 ],
               ),
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: EdgeInsets.all(50),
-                  child: _buildForm(),
-                ),
+              child: Stack(
+                // ADD THIS STACK
+                children: [
+                  SingleChildScrollView(
+                    child: Padding(
+                      padding: EdgeInsets.all(50),
+                      child: _buildForm(),
+                    ),
+                  ),
+                  Positioned(
+                    // ADD BACK BUTTON
+                    top: 20,
+                    left: 20,
+                    child: IconButton(
+                      icon: Icon(Icons.arrow_back, color: Colors.grey[700]),
+                      onPressed: widget.onBack,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -297,36 +459,51 @@ class _AuthUserState extends State<AuthUser>
             // Header Section
             Container(
               padding: EdgeInsets.all(30),
-              child: Column(
+              child: Stack(
+                // ADD THIS STACK
                 children: [
-                  Container(
-                    width: 70,
-                    height: 70,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.rocket_launch,
-                      color: Colors.white,
-                      size: 30,
-                    ),
+                  Column(
+                    // EXISTING COLUMN CONTENT
+                    children: [
+                      Container(
+                        width: 70,
+                        height: 70,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.rocket_launch,
+                          color: Colors.white,
+                          size: 30,
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      Text(
+                        isLogin ? "Welcome Back!" : "Create Account",
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      SizedBox(height: 10),
+                      Text(
+                        isLogin ? "Sign in to continue" : "Join our community",
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                    ],
                   ),
-                  SizedBox(height: 20),
-                  Text(
-                    isLogin ? "Welcome Back!" : "Create Account",
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  SizedBox(height: 10),
-                  Text(
-                    isLogin ? "Sign in to continue" : "Join our community",
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white.withOpacity(0.9),
+                  Positioned(
+                    // ADD BACK BUTTON
+                    top: 0,
+                    left: 0,
+                    child: IconButton(
+                      icon: Icon(Icons.arrow_back, color: Colors.white),
+                      onPressed: widget.onBack,
                     ),
                   ),
                 ],
@@ -373,6 +550,9 @@ class _AuthUserState extends State<AuthUser>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Show connection error if there is one
+              if (_hasNetworkError) _buildConnectionError(),
+
               // Logo Section
               Center(
                 child: Column(
@@ -413,7 +593,9 @@ class _AuthUserState extends State<AuthUser>
                     ),
                     SizedBox(height: 8),
                     Text(
-                      isLogin ? "Welcome to Company" : "Welcome to Company",
+                      isLogin
+                          ? "Welcome to Sakthi Software Solutions"
+                          : "Welcome to Software Solutions",
                       style: TextStyle(
                         fontSize: 16,
                         color: Colors.grey[600],
@@ -553,14 +735,18 @@ class _AuthUserState extends State<AuthUser>
                   onExit: (_) => setState(() => _isSignupHovered = false),
                   child: _buildOutlineButton(
                     text: "Sign In",
-                    onPressed: () => setState(() => isLogin = true),
+                    onPressed: isLoading
+                        ? null
+                        : () => setState(() => isLogin = true),
                     isHovered: _isSignupHovered,
                   ),
                 )
               else
                 Center(
                   child: TextButton(
-                    onPressed: () => setState(() => isLogin = false),
+                    onPressed: isLoading
+                        ? null
+                        : () => setState(() => isLogin = false),
                     child: Text.rich(
                       TextSpan(
                         text: "Don't have an account? ",
@@ -685,7 +871,7 @@ class _AuthUserState extends State<AuthUser>
 
   Widget _buildOutlineButton({
     required String text,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
     required bool isHovered,
   }) {
     return AnimatedContainer(
@@ -712,14 +898,25 @@ class _AuthUserState extends State<AuthUser>
         child: SizedBox(
           width: double.infinity,
           child: Center(
-            child: Text(
-              text,
-              style: TextStyle(
-                color: isHovered ? Color(0xFF667eea) : Color(0xFF667eea),
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            child: isLoading
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(0xFF667eea),
+                      ),
+                    ),
+                  )
+                : Text(
+                    text,
+                    style: TextStyle(
+                      color: isHovered ? Color(0xFF667eea) : Color(0xFF667eea),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
           ),
         ),
       ),

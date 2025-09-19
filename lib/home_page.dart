@@ -1,310 +1,4 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_application_1/userpagesfolder/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'auth_user.dart';
-import 'user.dart' hide HomePage;
-import 'admin.dart';
-import 'agent.dart';
-import 'home_page.dart';
-import 'about_page.dart';
-
-void main() {
-  runApp(MainApp());
-}
-
-class MainApp extends StatelessWidget {
-  const MainApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(primarySwatch: Colors.blue, fontFamily: 'Poppins'),
-      home: Main(),
-    );
-  }
-}
-
-class Main extends StatefulWidget {
-  const Main({super.key});
-
-  @override
-  _MainState createState() => _MainState();
-}
-
-class _MainState extends State<Main> with SingleTickerProviderStateMixin {
-  bool loggedIn = false;
-  String? role;
-  Map<String, dynamic>? userData;
-  int _currentIndex = 0;
-  bool _showAuthScreen = false;
-  late AnimationController _authPanelController;
-  bool _authPanelVisible = false;
-
-  @override
-  void initState() {
-    super.initState();
-    checkLogin();
-
-    _authPanelController = AnimationController(
-      vsync: this,
-      duration: Duration(milliseconds: 800),
-    );
-  }
-
-  @override
-  void dispose() {
-    _authPanelController.dispose();
-    super.dispose();
-  }
-
-  Future<void> checkLogin() async {
-    final prefs = await SharedPreferences.getInstance();
-    final email = prefs.getString('loggedInEmail');
-    final storedRole = prefs.getString('role');
-    final userDataString = prefs.getString('userData');
-
-    if (email != null && storedRole != null && userDataString != null) {
-      setState(() {
-        loggedIn = true;
-        role = storedRole.toUpperCase();
-        userData = jsonDecode(userDataString);
-      });
-    }
-  }
-
-  void handleLoginSuccess(Map<String, dynamic> user) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('loggedInEmail', user['email']);
-    await prefs.setString('role', user['role']);
-    await prefs.setString('userData', jsonEncode(user));
-
-    setState(() {
-      loggedIn = true;
-      role = user['role'].toUpperCase();
-      userData = user;
-      _showAuthScreen = false;
-      _authPanelVisible = false;
-    });
-
-    _authPanelController.reverse();
-  }
-
-  void logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('loggedInEmail');
-    await prefs.remove('role');
-    await prefs.remove('userData');
-    await prefs.remove('userId');
-    await prefs.remove('userName');
-    await prefs.remove('createdAt');
-
-    setState(() {
-      loggedIn = false;
-      role = null;
-      userData = null;
-      _showAuthScreen = false;
-      _currentIndex = 0;
-      _authPanelVisible = false;
-    });
-
-    _authPanelController.reverse();
-  }
-
-  void showAuthScreen() {
-    setState(() {
-      _showAuthScreen = true;
-      _authPanelVisible = true;
-    });
-
-    _authPanelController.forward();
-  }
-
-  void hideAuthScreen() {
-    setState(() {
-      _showAuthScreen = false;
-      _authPanelVisible = false;
-    });
-
-    _authPanelController.reverse();
-  }
-
-  Widget _buildAuthPanel() {
-    // This method now returns a full-screen widget
-    return SlideTransition(
-      position: Tween<Offset>(begin: const Offset(1.0, 0.0), end: Offset.zero)
-          .animate(
-            CurvedAnimation(
-              parent: _authPanelController,
-              curve: Curves.easeOutCubic,
-            ),
-          ),
-      child: FadeTransition(
-        opacity: _authPanelController,
-        // The AuthUser widget now takes up the entire available space
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(color: Colors.black26, blurRadius: 10, spreadRadius: 2),
-            ],
-          ),
-          child: AuthUser(
-            onLoginSuccess: handleLoginSuccess,
-            onBack: hideAuthScreen,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMainContent() {
-    return IndexedStack(
-      index: _currentIndex,
-      children: [
-        HomePage(onLoginPressed: showAuthScreen),
-        AboutPage(onLoginPressed: showAuthScreen),
-        Services(onLogout: logout),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (loggedIn) {
-      if (role == 'USER') {
-        return User(onLogout: logout, userData: userData);
-      } else if (role == 'ADMIN') {
-        return Admin(onLogout: logout);
-      } else if (role == 'AGENT') {
-        return Agent(onLogout: logout);
-      } else {
-        return User(onLogout: logout, userData: userData);
-      }
-    }
-
-    return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: AnimatedSwitcher(
-          duration: Duration(milliseconds: 300),
-          child: Text(
-            _currentIndex == 0
-                ? 'Sakthi Software Solutions'
-                : _currentIndex == 1
-                ? 'About Us'
-                : 'Our Services',
-            key: ValueKey<int>(_currentIndex),
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 20,
-              color: Colors.white,
-            ),
-          ),
-        ),
-        backgroundColor: Color(0xFF667eea),
-        foregroundColor: Colors.white,
-        elevation: 5,
-        shadowColor: Colors.black26,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.only(
-            bottomLeft: Radius.circular(15),
-            bottomRight: Radius.circular(15),
-          ),
-        ),
-        actions: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: AnimatedContainer(
-              duration: Duration(milliseconds: 300),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    offset: Offset(0, 5),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          _buildMainContent(),
-          if (_authPanelVisible)
-            // The authentication panel now takes up the entire screen,
-            // with a semi-transparent black overlay.
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withOpacity(0.4),
-                child: _buildAuthPanel(),
-              ),
-            ),
-        ],
-      ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          boxShadow: [
-            BoxShadow(color: Colors.black12, blurRadius: 10, spreadRadius: 2),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(15),
-            topRight: Radius.circular(15),
-          ),
-          child: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            onTap: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-            },
-            backgroundColor: Colors.white,
-            selectedItemColor: Color(0xFF667eea),
-            unselectedItemColor: Colors.grey[600],
-            selectedLabelStyle: TextStyle(fontWeight: FontWeight.w600),
-            showUnselectedLabels: true,
-            elevation: 10,
-            items: [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.home_outlined),
-                activeIcon: Icon(Icons.home_rounded),
-                label: 'Home',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.info_outline),
-                activeIcon: Icon(Icons.info_rounded),
-                label: 'About',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.work_outline),
-                activeIcon: Icon(Icons.work_rounded),
-                label: 'Services',
-              ),
-            ],
-          ),
-        ),
-      ),
-      floatingActionButton: _authPanelVisible
-          ? null
-          : FloatingActionButton(
-              onPressed: showAuthScreen,
-              backgroundColor: Color(0xFF667eea),
-              foregroundColor: Colors.white,
-              elevation: 5,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: Icon(Icons.person_add_alt_1),
-            ),
-    );
-  }
-}
 
 class HomePage extends StatelessWidget {
   final VoidCallback onLoginPressed;
@@ -318,6 +12,7 @@ class HomePage extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Hero Section
           Container(
             height: MediaQuery.of(context).size.height * 0.6,
             decoration: BoxDecoration(
@@ -327,13 +22,6 @@ class HomePage extends StatelessWidget {
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black26,
-                  blurRadius: 15,
-                  offset: Offset(0, 10),
-                ),
-              ],
             ),
             child: Center(
               child: Padding(
@@ -393,7 +81,10 @@ class HomePage extends StatelessWidget {
               ),
             ),
           ),
+
           SizedBox(height: 60),
+
+          // Services Section
           Center(
             child: Text(
               'Our Comprehensive Services',
@@ -413,6 +104,8 @@ class HomePage extends StatelessWidget {
             ),
           ),
           SizedBox(height: 40),
+
+          // Services Grid
           GridView.count(
             shrinkWrap: true,
             physics: NeverScrollableScrollPhysics(),
@@ -467,7 +160,10 @@ class HomePage extends StatelessWidget {
               ),
             ],
           ),
+
           SizedBox(height: 60),
+
+          // Why Choose Us Section
           Container(
             padding: EdgeInsets.all(30),
             decoration: BoxDecoration(
@@ -509,7 +205,10 @@ class HomePage extends StatelessWidget {
               ],
             ),
           ),
+
           SizedBox(height: 60),
+
+          // Call to Action
           Container(
             padding: EdgeInsets.all(40),
             decoration: BoxDecoration(
@@ -554,6 +253,7 @@ class HomePage extends StatelessWidget {
               ],
             ),
           ),
+
           SizedBox(height: 40),
         ],
       ),
